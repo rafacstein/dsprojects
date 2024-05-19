@@ -2,19 +2,20 @@
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 import statsmodels.api as sm
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import matplotlib.pyplot as plt
 
 # %%
 results = pd.read_csv("C:/Users/RafaelStein/Downloads/results.csv")
 rank = pd.read_csv("C:/Users/RafaelStein/Downloads/fifa_ranking-2024-04-04.csv")
 
 # %%
-results.tail(20)
+results.tail(5)
 
 # %%
 rank.tail()
@@ -33,6 +34,10 @@ rank = rank.set_index(['rank_date']).groupby(['country_full'], group_keys=False)
 
 # %%
 rank
+
+# %%
+results['home_team'] = results['home_team'].replace('Türkiye', 'Turkey')
+results['away_team'] = results['away_team'].replace('Türkiye', 'Turkey')
 
 # %%
 df_ranked = results.merge(rank[["country_full", "total_points", "previous_points", "rank", "rank_change", "rank_date"]], left_on=["date", "home_team"], right_on=["rank_date", "country_full"]).drop(["rank_date", "country_full"], axis=1)
@@ -128,9 +133,6 @@ stats_df = pd.DataFrame(stats_val, columns=stats_cols)
 full_df = pd.concat([team_stats.reset_index(drop=True), stats_df], axis=1, ignore_index=False)
 
 # %%
-full_df
-
-# %%
 home_team_stats = full_df.iloc[:int(full_df.shape[0]/2),:]
 away_team_stats = full_df.iloc[int(full_df.shape[0]/2):,:]
 
@@ -178,9 +180,6 @@ base_df_no_fg = base_df.dropna()
 df = base_df_no_fg
 
 # %%
-df
-
-# %%
 def no_draw(x):
     if x == 2:
         return 0
@@ -190,30 +189,12 @@ def no_draw(x):
 df["target"] = df["result"].apply(lambda x: no_draw(x))
 
 # %%
-df
-
-# %%
 string_columns = df.iloc[:, :3]
 
 # %%
 x = df.iloc[:, 3:39]
 
 # %%
-x
-
-# %%
-# Calculate correlation matrix for numeric columns
-correlation_matrix = x.corr().abs()
-
-# Create a mask to select upper triangle (excluding diagonal)
-mask = np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool)
-
-# Mask the correlation matrix to get upper triangle values
-upper_triangle = correlation_matrix.where(mask)
-
-# Get pairs of highly correlated features (columns)
-collinear_pairs = [(col1, col2) for col1 in upper_triangle.columns for col2 in upper_triangle.columns if upper_triangle.loc[col1, col2] > 0.9]
-
 # Remove collinear features from numeric_columns
 for col1, col2 in collinear_pairs:
     # Decide which feature to keep based on some criteria (e.g., domain knowledge)
@@ -230,7 +211,6 @@ df_filtered
 
 # %%
 #Modelo
-
 df_simulacao = df_filtered.copy()
 
 # %%
@@ -240,138 +220,89 @@ df_simulacao = df_simulacao.drop('date', axis=1)
 df_simulacao = df_simulacao.drop('target', axis=1)
 
 # %%
-germany_scotland_data = df_simulacao[(df_simulacao['home_team'] == 'Germany') | (df_simulacao['away_team'] == 'Serbia')]
+schedule = pd.read_excel("C:/Users/RafaelStein/Downloads/euro_schedule_sim.xlsx")
 
-# Separate features (X) and target variable (y)
-X = germany_scotland_data.drop(['result','home_team','away_team'], axis=1)  # Features
-y = germany_scotland_data['result']  # Target variable
-
-# %%
-# Initialize StandardScaler
-scaler = StandardScaler()
-
-# Fit the scaler to your data and transform it
-X = scaler.fit_transform(X)
+# %% [markdown]
+# Modelo que até o momento pareceu ter dado mais certo e tem resultados mais fidedignos com o futebol
 
 # %%
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# Read the match schedule from Excel
+schedule = pd.read_excel("C:/Users/RafaelStein/Downloads/euro_schedule_sim.xlsx")
 
-# Initialize Random Forest classifier
-rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+# Simulate each match
+for index, match_1 in schedule.iterrows():
+    home_team = match_1['home_team']
+    away_team = match_1['away_team']
 
-# Train the classifier
-rf_classifier.fit(X_train, y_train)
+    # Filter the DataFrame for the current match
+    match_1 = df_simulacao[(df_simulacao['home_team'] == home_team) | (df_simulacao['away_team'] == away_team)]
+    
+    # Separate features (X) and target variable (y)
+    X = match_1.drop(['result','home_team','away_team'], axis=1)  # Features
+    y = match_1['result']  # Target variable
 
+    if len(match_1) == 0:
+        continue  # Skip the current match if there are no samples
 
-germany_vs_scotland_features = X
+    # Initialize StandardScaler
+    scaler = StandardScaler()
 
-# Get the class labels of the model
-class_labels = rf_classifier.classes_
+    # Fit the scaler to your data and transform it
+    X = scaler.fit_transform(X)
 
-# Predict the probability of each class for the match between Germany and Scotland
-class_probabilities = rf_classifier.predict_proba(germany_vs_scotland_features)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Get the index corresponding to the label for Germany winning
-germany_win_index = list(class_labels).index(1)
+    # Initialize Random Forest classifier
+    rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
 
-# Extract the probability of Germany winning from the predicted probabilities
-germany_win_probability = class_probabilities[:, germany_win_index]
+    # Train the classifier
+    rf_classifier.fit(X_train, y_train)
 
-print("Probability of Germany winning against Scotland:", germany_win_probability)
+    match_1 = X
 
-# Calculate the average probability
-average_probability = class_probabilities.mean(axis=0)[germany_win_index]
+    # Predict the probability of each class for the match
+    class_probabilities = rf_classifier.predict_proba(match_1)
 
-print("Average probability of Germany winning against Scotland:", average_probability)
+    pts_home = 0
+    pts_away = 0
 
+    # Calculate the cumulative probabilities for each outcome
+    win_probability = class_probabilities[:, 1].mean()  # Probability of winning
+    draw_probability = class_probabilities[:, 2].mean()  # Probability of draw
+    lose_probability = class_probabilities[:, 0].mean()  # Probability of losing
+    # Calculate the highest probability and assign result
+    highest_index = np.argmax([win_probability, draw_probability, lose_probability])
 
-# %%
-# Fit the Random Forest classifier on the standardized features
-rf_classifier.fit(X, y)
+    # Assign result based on the highest probability
+    if highest_index == 0:
+        result = 'win'
+        pts_home += 3  # Add 3 points for a win
+    elif highest_index == 1:
+        result = 'draw'
+        pts_home += 1  # Add 1 point for a draw
+        pts_away += 1  # Add 1 point for a draw
+    else:
+        result = 'lose'
+        pts_away += 3  # Add 3 points for a lose
 
-# Get feature importances
-feature_importances = rf_classifier.feature_importances_
+    # Append the result to the schedule DataFrame
+    schedule.at[index, 'result'] = result
+    schedule.at[index, 'pts_home'] = pts_home
+    schedule.at[index, 'pts_away'] = pts_away
 
-# Create a DataFrame to store feature importances along with their names
-# Here, we'll just create generic column names like 'Feature_0', 'Feature_1', etc.
-num_features = X.shape[1]
-feature_names = [f'Feature_{i}' for i in range(num_features)]
-feature_importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': feature_importances})
-
-# Sort the DataFrame by feature importance in descending order
-feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
-
-# Print the feature importance ranking
-print("Feature Importance Ranking after Standardization:")
-print(feature_importance_df)
-
-# %%
-# Get feature importances
-feature_importances = rf_classifier.feature_importances_
-
-# Create a DataFrame to store feature importances along with their names
-feature_importance_df = pd.DataFrame({'Feature': X.columns, 'Importance': feature_importances})
-
-# Sort the DataFrame by feature importance in descending order
-feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
-
-# Calculate cumulative importance
-feature_importance_df['Cumulative_Importance'] = feature_importance_df['Importance'].cumsum()
-
-# Select features corresponding to 70% of the importance
-selected_features = feature_importance_df[feature_importance_df['Cumulative_Importance'] <= 0.7]['Feature']
-
-print("Selected Features:")
-print(selected_features)
+# Save the updated schedule to the same Excel file
+schedule.to_excel("C:/Users/RafaelStein/Downloads/euro_schedule_sim.xlsx", index=False)
 
 # %%
-selected_features = ['home_score', 'away_score', 'rank_dif', 'rank_home', 'rank_away',
-                     'home_rank_mean_l5', 'home_points_mean_l5', 'home_game_points_rank_mean',
-                     'away_game_points_rank_mean', 'home_points_mean', 'home_rank_mean',
-                     'home_goals_suf_mean', 'away_rank_mean_l5', 'away_game_points_mean_l5']
+# Predict the test set
+y_pred = rf_classifier.predict(X_test)
 
-# %%
-germany_scotland_data = df_simulacao[(df_simulacao['home_team'] == 'Germany') | (df_simulacao['away_team'] == 'Scotland')]
-
-# %%
-# Separate features (X) and target variable (y)
-X = germany_scotland_data[selected_features]  # Features
-y = germany_scotland_data['result']  # Target variable
-
-# %%
-# Initialize StandardScaler
-scaler = StandardScaler()
-
-# Fit the scaler to your data and transform it
-X = scaler.fit_transform(X)
-
-# %%
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Initialize Random Forest classifier
-rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
-
-# Train the classifier
-rf_classifier.fit(X_train, y_train)
-
-
-germany_vs_scotland_features = X
-
-# Get the class labels of the model
-class_labels = rf_classifier.classes_
-
-# Predict the probability of each class for the match between Germany and Scotland
-class_probabilities = rf_classifier.predict_proba(germany_vs_scotland_features)
-
-# Get the index corresponding to the label for Germany winning
-germany_win_index = list(class_labels).index(1)
-
-# Extract the probability of Germany winning from the predicted probabilities
-germany_win_probability = class_probabilities[:, germany_win_index]
-
-print("Probability of Germany winning against Scotland:", germany_win_probability)
-
-# Calculate the average probability
-average_probability = class_probabilities.mean(axis=0)[germany_win_index]
-
-print("Average probability of Germany winning against Scotland:", average_probability)
+# Calculate metrics
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred, average='weighted')
+recall = recall_score(y_test, y_pred, average='weighted')
+f1 = f1_score(y_test, y_pred, average='weighted')
+print(f"Average Accuracy: {accuracy}")
+print(f"Average Precision: {precision}")
+print(f"Average Recall: {recall}")
+print(f"Average F1 Score: {f1}")
