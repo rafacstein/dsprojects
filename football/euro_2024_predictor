@@ -1,0 +1,308 @@
+# %%
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+from sklearn.preprocessing import StandardScaler
+import statsmodels.api as sm
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import matplotlib.pyplot as plt
+
+# %%
+results = pd.read_csv("C:/Users/RafaelStein/Downloads/results.csv")
+rank = pd.read_csv("C:/Users/RafaelStein/Downloads/fifa_ranking-2024-04-04.csv")
+
+# %%
+results.tail(5)
+
+# %%
+rank.tail()
+
+# %%
+results['date'] = pd.to_datetime(results['date'], format='%Y-%m-%d')
+rank["rank_date"] = pd.to_datetime(rank["rank_date"])
+rank = rank[(rank["rank_date"] >= "2002-6-30") & (rank['rank_date'] <= '2024-03-26')].reset_index(drop=True)
+
+# %%
+team_list = ['Germany','Scotland','Hungary','Switzerland','Spain','Croatia','Italy','Albania','Slovenia','Denmark','Serbia','England','Poland','Netherlands','Austria','France','Belgium','Slovakia','Romania','Ukraine',
+             'Turkey','Georgia','Portugal','Czechia']
+
+# %%
+rank = rank.set_index(['rank_date']).groupby(['country_full'], group_keys=False).resample('D').first().fillna(method='ffill').reset_index()
+
+# %%
+rank
+
+# %%
+results['home_team'] = results['home_team'].replace('Türkiye', 'Turkey')
+results['away_team'] = results['away_team'].replace('Türkiye', 'Turkey')
+
+# %%
+df_ranked = results.merge(rank[["country_full", "total_points", "previous_points", "rank", "rank_change", "rank_date"]], left_on=["date", "home_team"], right_on=["rank_date", "country_full"]).drop(["rank_date", "country_full"], axis=1)
+
+df_ranked = df_ranked.merge(rank[["country_full", "total_points", "previous_points", "rank", "rank_change", "rank_date"]], left_on=["date", "away_team"], right_on=["rank_date", "country_full"], suffixes=("_home", "_away")).drop(["rank_date", "country_full"], axis=1)
+
+# %%
+filtered_teams = df_ranked[(df_ranked['home_team'].isin(team_list)) | (df_ranked['away_team'].isin(team_list))]
+
+# %%
+df = filtered_teams
+
+# %%
+def result_finder(home, away):
+    if home > away:
+        return pd.Series([1, 3, 0])
+    if home < away:
+        return pd.Series([0, 0, 3])
+    else:
+        return pd.Series([2, 1, 1])
+
+points = filtered_teams.apply(lambda x: result_finder(x["home_score"], x["away_score"]), axis=1)
+
+# %%
+df[["result", "home_team_points", "away_team_points"]] = points
+
+# %%
+df["rank_dif"] = df["rank_home"] - df["rank_away"]
+df["sg"] = df["home_score"] - df["away_score"]
+df["points_home_by_rank"] = df["home_team_points"]/df["rank_away"]
+df["points_away_by_rank"] = df["away_team_points"]/df["rank_home"]
+
+# %%
+df.tail(10)
+
+# %%
+home_team = df[["date", "home_team", "home_score", "away_score", "rank_home", "rank_away","rank_change_home", "total_points_home", "result", "rank_dif", "points_home_by_rank", "home_team_points"]]
+
+away_team = df[["date", "away_team", "away_score", "home_score", "rank_away", "rank_home","rank_change_away", "total_points_away", "result", "rank_dif", "points_away_by_rank", "away_team_points"]]
+
+# %%
+home_team.columns = [h.replace("home_", "").replace("_home", "").replace("away_", "suf_").replace("_away", "_suf") for h in home_team.columns]
+
+away_team.columns = [a.replace("away_", "").replace("_away", "").replace("home_", "suf_").replace("_home", "_suf") for a in away_team.columns]
+
+# %%
+team_stats = home_team.append(away_team)#.sort_values("date")
+
+# %%
+team_stats
+
+# %%
+team_stats_raw = team_stats.copy()
+
+# %%
+stats_val = []
+
+for index, row in team_stats.iterrows():
+    team = row["team"]
+    date = row["date"]
+    past_games = team_stats.loc[(team_stats["team"] == team) & (team_stats["date"] < date)].sort_values(by=['date'], ascending=False)
+    last5 = past_games.head(5)
+    
+    goals = past_games["score"].mean()
+    goals_l5 = last5["score"].mean()
+    
+    goals_suf = past_games["suf_score"].mean()
+    goals_suf_l5 = last5["suf_score"].mean()
+    
+    rank = past_games["rank_suf"].mean()
+    rank_l5 = last5["rank_suf"].mean()
+    
+    if len(last5) > 0:
+        points = past_games["total_points"].values[0] - past_games["total_points"].values[-1]#qtd de pontos ganhos
+        points_l5 = last5["total_points"].values[0] - last5["total_points"].values[-1] 
+    else:
+        points = 0
+        points_l5 = 0
+        
+    gp = past_games["team_points"].mean()
+    gp_l5 = last5["team_points"].mean()
+    
+    gp_rank = past_games["points_by_rank"].mean()
+    gp_rank_l5 = last5["points_by_rank"].mean()
+    
+    stats_val.append([goals, goals_l5, goals_suf, goals_suf_l5, rank, rank_l5, points, points_l5, gp, gp_l5, gp_rank, gp_rank_l5])
+
+# %%
+stats_cols = ["goals_mean", "goals_mean_l5", "goals_suf_mean", "goals_suf_mean_l5", "rank_mean", "rank_mean_l5", "points_mean", "points_mean_l5", "game_points_mean", "game_points_mean_l5", "game_points_rank_mean", "game_points_rank_mean_l5"]
+
+stats_df = pd.DataFrame(stats_val, columns=stats_cols)
+
+full_df = pd.concat([team_stats.reset_index(drop=True), stats_df], axis=1, ignore_index=False)
+
+# %%
+home_team_stats = full_df.iloc[:int(full_df.shape[0]/2),:]
+away_team_stats = full_df.iloc[int(full_df.shape[0]/2):,:]
+
+# %%
+home_team_stats = home_team_stats[home_team_stats.columns[-12:]]
+away_team_stats = away_team_stats[away_team_stats.columns[-12:]]
+
+# %%
+home_team_stats.columns = ['home_'+str(col) for col in home_team_stats.columns]
+away_team_stats.columns = ['away_'+str(col) for col in away_team_stats.columns]
+
+# %%
+match_stats = pd.concat([home_team_stats, away_team_stats.reset_index(drop=True)], axis=1, ignore_index=False)
+
+# %%
+full_df = pd.concat([df, match_stats.reset_index(drop=True)], axis=1, ignore_index=False)
+
+# %%
+def find_friendly(x):
+    if x == "Friendly":
+        return 1
+    else: return 0
+
+full_df["is_friendly"] = full_df["tournament"].apply(lambda x: find_friendly(x)) 
+
+# %%
+full_df = pd.get_dummies(full_df, columns=["is_friendly"])
+
+# %%
+base_df = full_df[["date", "home_team", "away_team", "rank_home", "rank_away","home_score", "away_score","result", "rank_dif", "rank_change_home", "rank_change_away", 'home_goals_mean',
+       'home_goals_mean_l5', 'home_goals_suf_mean', 'home_goals_suf_mean_l5',
+       'home_rank_mean', 'home_rank_mean_l5', 'home_points_mean',
+       'home_points_mean_l5', 'away_goals_mean', 'away_goals_mean_l5',
+       'away_goals_suf_mean', 'away_goals_suf_mean_l5', 'away_rank_mean',
+       'away_rank_mean_l5', 'away_points_mean', 'away_points_mean_l5','home_game_points_mean', 'home_game_points_mean_l5',
+       'home_game_points_rank_mean', 'home_game_points_rank_mean_l5','away_game_points_mean',
+       'away_game_points_mean_l5', 'away_game_points_rank_mean',
+       'away_game_points_rank_mean_l5',
+       'is_friendly_0', 'is_friendly_1']]
+
+# %%
+base_df_no_fg = base_df.dropna()
+
+# %%
+df = base_df_no_fg
+
+# %%
+def no_draw(x):
+    if x == 2:
+        return 0
+    else:
+        return x
+    
+df["target"] = df["result"].apply(lambda x: no_draw(x))
+
+# %%
+string_columns = df.iloc[:, :3]
+
+# %%
+x = df.iloc[:, 3:39]
+
+# %%
+# Remove collinear features from numeric_columns
+for col1, col2 in collinear_pairs:
+    # Decide which feature to keep based on some criteria (e.g., domain knowledge)
+    # Here, we drop one of the features arbitrarily
+    x.drop(col1, axis=1, inplace=True)
+
+# %%
+# Concatenate string columns with numeric columns
+df_filtered = pd.concat([string_columns, x], axis=1)
+#O numero de variáveis diminuiu para 26 após a remoção da colinearidade
+
+# %%
+df_filtered
+
+# %%
+#Modelo
+df_simulacao = df_filtered.copy()
+
+# %%
+df_simulacao = df_simulacao.drop('date', axis=1)
+
+# %%
+df_simulacao = df_simulacao.drop('target', axis=1)
+
+# %%
+schedule = pd.read_excel("C:/Users/RafaelStein/Downloads/euro_schedule_sim.xlsx")
+
+# %% [markdown]
+# Modelo que até o momento pareceu ter dado mais certo e tem resultados mais fidedignos com o futebol
+
+# %%
+# Read the match schedule from Excel
+schedule = pd.read_excel("C:/Users/RafaelStein/Downloads/euro_schedule_sim.xlsx")
+
+# Simulate each match
+for index, match_1 in schedule.iterrows():
+    home_team = match_1['home_team']
+    away_team = match_1['away_team']
+
+    # Filter the DataFrame for the current match
+    match_1 = df_simulacao[(df_simulacao['home_team'] == home_team) | (df_simulacao['away_team'] == away_team)]
+    
+    # Separate features (X) and target variable (y)
+    X = match_1.drop(['result','home_team','away_team'], axis=1)  # Features
+    y = match_1['result']  # Target variable
+
+    if len(match_1) == 0:
+        continue  # Skip the current match if there are no samples
+
+    # Initialize StandardScaler
+    scaler = StandardScaler()
+
+    # Fit the scaler to your data and transform it
+    X = scaler.fit_transform(X)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Initialize Random Forest classifier
+    rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+
+    # Train the classifier
+    rf_classifier.fit(X_train, y_train)
+
+    match_1 = X
+
+    # Predict the probability of each class for the match
+    class_probabilities = rf_classifier.predict_proba(match_1)
+
+    pts_home = 0
+    pts_away = 0
+
+    # Calculate the cumulative probabilities for each outcome
+    win_probability = class_probabilities[:, 1].mean()  # Probability of winning
+    draw_probability = class_probabilities[:, 2].mean()  # Probability of draw
+    lose_probability = class_probabilities[:, 0].mean()  # Probability of losing
+    # Calculate the highest probability and assign result
+    highest_index = np.argmax([win_probability, draw_probability, lose_probability])
+
+    # Assign result based on the highest probability
+    if highest_index == 0:
+        result = 'win'
+        pts_home += 3  # Add 3 points for a win
+    elif highest_index == 1:
+        result = 'draw'
+        pts_home += 1  # Add 1 point for a draw
+        pts_away += 1  # Add 1 point for a draw
+    else:
+        result = 'lose'
+        pts_away += 3  # Add 3 points for a lose
+
+    # Append the result to the schedule DataFrame
+    schedule.at[index, 'result'] = result
+    schedule.at[index, 'pts_home'] = pts_home
+    schedule.at[index, 'pts_away'] = pts_away
+
+# Save the updated schedule to the same Excel file
+schedule.to_excel("C:/Users/RafaelStein/Downloads/euro_schedule_sim.xlsx", index=False)
+
+# %%
+# Predict the test set
+y_pred = rf_classifier.predict(X_test)
+
+# Calculate metrics
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred, average='weighted')
+recall = recall_score(y_test, y_pred, average='weighted')
+f1 = f1_score(y_test, y_pred, average='weighted')
+print(f"Average Accuracy: {accuracy}")
+print(f"Average Precision: {precision}")
+print(f"Average Recall: {recall}")
+print(f"Average F1 Score: {f1}")
